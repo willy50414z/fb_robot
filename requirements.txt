@@ -1,3 +1,6 @@
-apify-client
-psycopg2-binary
-python-dotenv
+# 依賴已集中管理於 pyproject.toml。
+# 安裝方式（會一併安裝本專案為可編輯套件）：
+#   pip install -e ".[dev]"
+#
+# 這支檔案保留只是為了相容既有的 `pip install -r requirements.txt` 流程。
+-e .
