@@ -1,0 +1,8 @@
+# 真实环境变量文件，禁止提交
+.env
+.env.local
+.env.*.local
+
+# 但模板要保留
+!.env.example
+.idea

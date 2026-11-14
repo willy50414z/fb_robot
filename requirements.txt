@@ -1,0 +1,3 @@
+apify-client
+psycopg2-binary
+python-dotenv
