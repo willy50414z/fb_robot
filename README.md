@@ -17,12 +17,19 @@ fb_robot/
 │   ├── crawler.py              # 呼叫 Apify Actor 抓取社團貼文
 │   ├── db.py                   # 建立 PostgreSQL 連線
 │   ├── service.py              # 串接爬蟲與資料庫的同步流程（原 app.py）
-│   └── upsert/
-│       ├── hashing.py          # 正規化、content_hash、SimHash、Hamming distance
-│       ├── records.py          # Actor 回傳欄位 -> DB 參數（build_params 等）
-│       ├── sql.py              # 所有 SQL 陳述句
-│       ├── schema.py           # ensure_schema：欄位/索引/註解與舊表遷移
-│       └── processor.py        # canonical 判定、版本歷史、mapping 與交易管理
+│   ├── upsert/
+│   │   ├── hashing.py          # 正規化、content_hash、SimHash、Hamming distance
+│   │   ├── records.py          # Actor 回傳欄位 -> DB 參數（build_params 等）
+│   │   ├── sql.py              # 所有 SQL 陳述句
+│   │   ├── schema.py           # ensure_schema：欄位/索引/註解與舊表遷移
+│   │   └── processor.py        # canonical 判定、版本歷史、mapping 與交易管理
+│   └── classify/
+│       ├── schema.sql          # 分類 DDL：字典/事實表/檢視（冪等，classify 啟動時套用）
+│       └── prompts/v1/         # system.txt + user.txt + output.schema.json
+├── docs/
+│   ├── classification-design.md        # 分類設計定稿：DDL、prompt、端點契約、分期計畫
+│   ├── classification-sample.md        # 人工標註的 benchmark ground truth（117 列／86 篇）
+│   └── classification-decision-log.md  # 判讀規則 R1–R14、計分門檻、決策變更記錄
 └── tests/                      # pytest 單元測試（不需要真實資料庫）
 ```
 
@@ -38,6 +45,7 @@ fb_robot/
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+pip install -e ".[classify]"      # 要跑 LLM 貼文分類時再裝（openai + jsonschema）
 ```
 
 ## 設定
@@ -101,11 +109,38 @@ settings = get_settings()
 sync_all_groups(settings)
 ```
 
+## 貼文分類（LLM 擷取）
+
+把爬進來的貼文用 LLM 拆成可查詢、可比價的商品資料（分類 / 品牌 / 型號 / 容量 / 價格 / 可購買）。
+管線為最小可驗證版本：`fb-robot classify` 逐篇呼叫本地端點、驗證 JSON、寫入 `fb_post_classifications` / `fb_post_items`；成本控制、佇列、併發等刻意未做，待實測後再決定。
+
+```bash
+fb-robot classify --dry-run --limit 5   # 先看輸出，不寫庫
+fb-robot classify --limit 20            # 寫庫（會先套用 classify/schema.sql）
+```
+
+- DDL：`src/fb_robot/classify/schema.sql`（冪等，可重複執行；`classify` 啟動時自動套用）
+- Prompt：`src/fb_robot/classify/prompts/v1/`（`system.txt` 規則 + few-shot、`user.txt` 範本、`output.schema.json`）
+- 端點：`openai` SDK 連本地 OpenAI 相容端點（`FB_LLM_MODEL` + `FB_LLM_API_BASE`），參數見 `.env.example`
+- 完整設計：`docs/classification-design.md`（資料模型、端點、評測、範圍）
+- 一致性守門：`tests/test_classify_prompts.py` 比對 prompt 的 few-shot、Schema 列舉與 DDL 的 CHECK / 字典種子
+
+### 評測（benchmark）
+
+上線前用同一批 post_id 回放，比對人工標註的標準答案：
+
+- 標準答案：`docs/classification-sample.md`（117 列／86 篇）；判讀規則、逐案取捨、可接受答案與計分門檻：`docs/classification-decision-log.md`
+- 門檻：category ≥ 0.92、`purchasable` ≥ 0.95、有價樣本價格完全一致率 ≥ 0.90、每篇品項數誤差 ≤ 0.3
+- 標準答案採 **append-only**：只有新的誤判案例才追加，既有列的判讀不改寫，否則歷次分數無法比較
+- 複核某篇原文：`SELECT text FROM fb_group_posts WHERE post_id = '…'`；取新列素材（只取原文，不重新判讀）：
+  `SELECT post_id, left(regexp_replace(text, '\s+', ' ', 'g'), 100) FROM fb_group_posts ORDER BY publish_time`
+- 改 prompt 版本或輸出欄位後必須重跑同一批 post_id 並附 diff 報表，同時在決策紀錄的「變更記錄」補一行
+
 ## 開發
 
 ```bash
 pytest                 # 單元測試，使用假游標，不需要資料庫連線
-ruff check src tests   # 静态检查
+ruff check src tests   # 靜態檢查
 ```
 
 ## 寫入邏輯

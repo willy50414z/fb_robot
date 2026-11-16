@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fb-robot://schemas/post-classification-v1.json",
+  "title": "FBPostClassificationV1",
+  "$comment": "給 litellm response_format 與本地驗證共用。判定規則見 docs/classification-decision-log.md（R1–R14），人工標註基準見 docs/classification-sample.md。本 schema 用 nullable enum（enum 內含 null），OpenAI strict mode 不接受，呼叫時必須 FB_LLM_STRICT_SCHEMA=false。列舉值與 schema.sql 的 CHECK／字典種子由 tests/test_classify_prompts.py 靜態比對，改一邊請同步另一邊。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "post_intent",
+    "summary",
+    "items"
+  ],
+  "properties": {
+    "post_intent": {
+      "$ref": "#/$defs/intent",
+      "description": "整篇貼文的意圖（R4）。句首出現「收/徵/求/尋」多為收購，金額是預算不是售價"
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300,
+      "description": "一句繁中摘要，供人工複核；內容無法理解時給 null"
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "description": "可獨立成交的品項，一項一筆（R1）；成套單一價格算一筆（R6）。業配廣告、純問答、與電腦硬體無關時給空陣列 []；有明確交易動作但讀不出品項時給一筆 category=unknown（R13）"
+    }
+  },
+  "$defs": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "sell",
+        "auction",
+        "want_to_buy",
+        "trade",
+        "giveaway",
+        "question",
+        "info",
+        "spam",
+        "unknown"
+      ]
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "category",
+        "model",
+        "brand",
+        "capacity",
+        "price_amount",
+        "price_kind",
+        "purchasable",
+        "bundle",
+        "snippet",
+        "confidence"
+      ],
+      "properties": {
+        "category": {
+          "type": "string",
+          "enum": [
+            "cpu",
+            "motherboard",
+            "ram",
+            "gpu",
+            "ssd",
+            "hdd",
+            "psu",
+            "cooler",
+            "case",
+            "monitor",
+            "laptop",
+            "desktop",
+            "mini_pc",
+            "console",
+            "network",
+            "peripheral",
+            "cable",
+            "other",
+            "unknown"
+          ],
+          "description": "商品分類，只能選清單內的值（對應 fb_taxonomy.category_key）。SSD/HDD 看實體型態不看「硬碟」兩字：M.2/NVMe/SATA 固態 → ssd，機械式（3.5吋/2.5吋/轉速/企業級）→ hdd。能獨立開機的整機用 desktop/mini_pc/laptop；「板U套」以最主要元件為 category（R3）。找不到對應分類用 other，資訊不足用 unknown（R13、R14）"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200,
+          "description": "型號＋關鍵規格，忠於原文並做最小正規化（R10），例：GTX650 1G、SPATIUM S270 240GB SATA、i7-12700（非K）。成套/半套把內容用「 + 」串在同一欄（R3、R6），例：B760M 主板 + DDR4 16G*2。原文未標型號給 null，不要用市價或保固日期反推"
+        },
+        "brand": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "intel",
+            "amd",
+            "nvidia",
+            "asus",
+            "gigabyte",
+            "msi",
+            "asrock",
+            "evga",
+            "zotac",
+            "pny",
+            "galax",
+            "colorful",
+            "sapphire",
+            "xfx",
+            "powercolor",
+            "samsung",
+            "skhynix",
+            "micron",
+            "crucial",
+            "kioxia",
+            "toshiba",
+            "westerndigital",
+            "seagate",
+            "kingston",
+            "adata",
+            "teamgroup",
+            "gskill",
+            "lexar",
+            "sandisk",
+            "corsair",
+            "thermaltake",
+            "noctua",
+            "deepcool",
+            "silverstone",
+            "lianli",
+            "cougar",
+            "zooten",
+            "hipro",
+            "seasonic",
+            "fsp",
+            "enermax",
+            "bequiet",
+            "coolermaster",
+            "logitech",
+            "razer",
+            "apple",
+            "lenovo",
+            "dell",
+            "hp",
+            "acer",
+            null
+          ],
+          "description": "品牌代碼，只能選本欄清單（小寫英文，對應 fb_brand.brand_key）；整張顯卡的品牌是實際廠商（華碩→asus）而非 GPU 晶片廠，只有公版/FE 或只提晶片型號時才給 nvidia/amd。清單外或不知道給 null，不要自創代碼"
+        },
+        "capacity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 40,
+          "description": "容量或尺寸的原文字串，例：240GB、4TB、8G*2、16GB DDR4、27吋。照貼文寫、不做單位換算；未標給 null"
+        },
+        "price_amount": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 10000000,
+          "description": "本價數字，一律視為 TWD（R7、R8）。取「售價/【價格】/$」的數字；「原價/建議售價/加購價」不算本價。口語換算：13.2萬→132000、7w→70000。收購預算填預算值並在 price_kind 標 budget。貼文沒寫或無法解析給 null，禁止用市價、保固或型號反推（R9）"
+        },
+        "price_kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "asking",
+            "bundle",
+            "starting_bid",
+            "budget",
+            "reference",
+            "sold_price",
+            "unknown",
+            null
+          ],
+          "description": "價格語意：asking 售價 / bundle 多件共用總價 / starting_bid 起標價 / budget 收購預算 / reference 參考價 / sold_price 成交價 / unknown 有價格但無法歸類；無價格給 null"
+        },
+        "purchasable": {
+          "type": "string",
+          "enum": [
+            "yes",
+            "no",
+            "unknown"
+          ],
+          "description": "這一項現在買不買得到（R5、R13）：yes 可成交（出售或標案進行中）/ no 買不到（收購、已售出、已保留、內容被划掉）/ unknown 資訊不足。沒有價格不影響本欄"
+        },
+        "bundle": {
+          "type": "boolean",
+          "description": "是否成套出售（一個價格賣多個東西，R6）。true 時其餘內容寫進 model，不要拆成多筆虛增市場價格"
+        },
+        "snippet": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 120,
+          "description": "支持本項判讀的原文逐字片段（建議 8–120 字，不改寫、不翻譯），讓人能複核"
+        },
+        "confidence": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "模型對本項判讀的自評信心 0–1。任何一步靠推論而非原文明示時要降到 0.6 以下（人工複核門檻）"
+        }
+      }
+    }
+  }
+}
