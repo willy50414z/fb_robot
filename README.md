@@ -193,3 +193,4 @@ ruff check src tests   # 靜態檢查
 | `from db import create_connection` | `from fb_robot import create_connection` |
 | `from fb_group_posts_upsert import process_items` | `from fb_robot import process_items` |
 | 模組常數 `SIMHASH_MAX_DISTANCE` 等 | `DedupSettings`（環境變數或函式參數） |
+# fb_robot
